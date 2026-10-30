@@ -25,7 +25,8 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 
 import build_dataset
-from robot_me_cung import DIRS, SEED, a_star, bfs, greedy_best_first, hill_climbing, manhattan, neighbors
+from robot_me_cung import (DIRS, SEED, a_star, bfs, euclidean, greedy_best_first,
+                           hill_climbing, manhattan, neighbors)
 
 IMAGES = "dataset/images"
 
@@ -132,10 +133,13 @@ def evaluate_search(model, mazes):
         h_ml = learned_heuristic(model, g, t, m["density"])
         for name, fn, h in (("BFS", bfs, None),
                             ("HC-Manhattan", hill_climbing, manhattan),
+                            ("HC-Euclidean", hill_climbing, euclidean),
                             ("HC-Learned", hill_climbing, h_ml),
                             ("GBFS-Manhattan", greedy_best_first, manhattan),
+                            ("GBFS-Euclidean", greedy_best_first, euclidean),
                             ("GBFS-Learned", greedy_best_first, h_ml),
                             ("A*-Manhattan", a_star, manhattan),
+                            ("A*-Euclidean", a_star, euclidean),
                             ("A*-Learned", a_star, h_ml)):
             path, expanded, _ = fn(g, s, t, h)
             ok = bool(path)
