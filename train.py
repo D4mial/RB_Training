@@ -2,13 +2,14 @@
 # -*- coding: utf-8 -*-
 """Huấn luyện heuristic h(n) học được từ dataset ảnh mê cung, so sánh với Manhattan trong GBFS / A*.
 
-    python train.py                  # tự sinh dataset ảnh nếu chưa có
-    python train.py --rebuild        # sinh lại dataset ảnh trước khi train
+python train.py            # tự sinh dataset ảnh nếu chưa có
+python train.py --rebuild  # sinh lại dataset ảnh trước khi train
 
 Chia dữ liệu theo mê cung (ảnh): 75% đầu mỗi loại để train, 25% cuối để test.
 K1 và K2 (cố định, 1 ảnh) chỉ dùng để kiểm tra.
 Đầu ra: models/heuristic_model.joblib, results/report.json, results/search_comparison.csv
 """
+
 import argparse
 import glob
 import json
@@ -24,9 +25,10 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 
 import build_dataset
-from robot_me_cung import DIRS, SEED, a_star, bfs, greedy_best_first, manhattan, neighbors
+from robot_me_cung import DIRS, SEED, a_star, bfs, greedy_best_first, hill_climbing, manhattan, neighbors
 
 IMAGES = "dataset/images"
+
 FEATURE_NAMES = [
     "x", "y", "dx", "dy", "manhattan", "euclid",
     "wall_up", "wall_down", "wall_left", "wall_right",
@@ -116,20 +118,40 @@ def learned_heuristic(model, grid, goal, density):
 
 
 def evaluate_search(model, mazes):
+    """Chạy từng thuật toán trên các mê cung test, trả về bảng theo (loại mê cung, thuật toán):
+    success_pct    : tỉ lệ tìm được đường (%)
+    nodes_expanded : số nút duyệt (mở rộng) trung bình, tính trên mọi lần chạy
+    nodes_traveled : số nút trên đường đi tìm được, trung bình (chỉ tính các lần thành công)
+    path_ratio     : độ dài đường / độ dài tối ưu (BFS), chỉ tính các lần thành công
+    """
     rows = []
     for m in mazes:
         g, s, t = m["grid"], m["start"], m["goal"]
-        opt = len(bfs(g, s, t)[0]) - 1
+        opt_path = bfs(g, s, t)[0]
+        opt = len(opt_path) - 1 if opt_path else None
         h_ml = learned_heuristic(model, g, t, m["density"])
-        for name, fn, h in (("GBFS-Manhattan", greedy_best_first, manhattan),
+        for name, fn, h in (("BFS", bfs, None),
+                            ("HC-Manhattan", hill_climbing, manhattan),
+                            ("HC-Learned", hill_climbing, h_ml),
+                            ("GBFS-Manhattan", greedy_best_first, manhattan),
                             ("GBFS-Learned", greedy_best_first, h_ml),
                             ("A*-Manhattan", a_star, manhattan),
                             ("A*-Learned", a_star, h_ml)):
             path, expanded, _ = fn(g, s, t, h)
-            rows.append({"kind": m["kind"], "algo": name, "nodes": len(expanded),
-                         "ratio": (len(path) - 1) / opt if path and opt else np.nan})
+            ok = bool(path)
+            rows.append({
+                "kind": m["kind"], "algo": name, "ok": 100.0 * ok,
+                "expanded": len(expanded),
+                "traveled": len(path) if ok else np.nan,
+                "ratio": (len(path) - 1) / opt if ok and opt else np.nan,
+            })
     df = pd.DataFrame(rows)
-    return df.groupby(["kind", "algo"]).agg(nodes=("nodes", "mean"), path_ratio=("ratio", "mean")).round(3)
+    return df.groupby(["kind", "algo"], sort=False).agg(
+        success_pct=("ok", "mean"),
+        nodes_expanded=("expanded", "mean"),
+        nodes_traveled=("traveled", "mean"),
+        path_ratio=("ratio", "mean"),
+    ).round(3)
 
 
 def main():
@@ -152,6 +174,7 @@ def main():
 
     rng = random.Random(SEED)
     train, test = to_frame(train_m, a.cells, rng), to_frame(test_m, a.cells, rng)
+
     model = HistGradientBoostingRegressor(max_iter=a.max_iter, learning_rate=a.lr,
                                           early_stopping=True, random_state=SEED)
     model.fit(train[FEATURE_NAMES], train["true_dist"])
@@ -174,9 +197,15 @@ def main():
         if counts.get(m["kind"], 0) < a.eval_per_kind:
             counts[m["kind"]] = counts.get(m["kind"], 0) + 1
             eval_m.append(m)
-    print(f"\n=== Tìm đường trên {len(eval_m)} mê cung test (nút mở rộng TB, đường/tối ưu) ===")
+
+    print(f"\n=== Tìm đường trên {len(eval_m)} mê cung test ===")
     res = evaluate_search(model, eval_m)
-    print(res.to_string())
+    for kind, sub in res.groupby(level="kind", sort=False):
+        print(f"\n--- {kind} ---")
+        print(f"{'Thuật toán':<16}{'Tìm được đường':>16}{'Nút duyệt':>12}{'Nút đi':>10}{'Đường/tối ưu':>14}")
+        for (_, algo), r in sub.iterrows():
+            print(f"{algo:<16}{r.success_pct:>15.1f}%{r.nodes_expanded:>12.1f}"
+                  f"{r.nodes_traveled:>10.1f}{r.path_ratio:>14.3f}")
 
     os.makedirs("models", exist_ok=True)
     os.makedirs("results", exist_ok=True)
